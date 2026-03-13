@@ -1,24 +1,22 @@
-# CLI Arkanoid
+# CLI Pinball Prototype
 
-A terminal Arkanoid / brick-breaker game built with `curses`.
+The project is now pivoting toward a terminal pinball game inspired by classic space tables.
 
-## What This Project Does
+## Current Prototype
 
-- Lets you move a paddle in the terminal to bounce the ball and clear every brick.
-- Tracks score, waves, local high scores, and simple falling power-ups.
-- Includes a title screen, round countdown, game over flow, and high-score entry.
+- Single-screen ASCII table tuned for `80x24` and playable at `60x24`
+- Charged launch lane with a skill-shot window
+- Two flippers with direct left / right control
+- Three `I O N` targets that light the central reactor
+- Reactor jackpot that increases the score multiplier
+- Rescue lane, ball save, local high scores, and name entry
 
-## Refactor Highlights
-
-- Reorganized the code around clear data objects and smaller update/render helpers.
-- Replaced fragile non-ASCII UI glyphs with plain ASCII so the game renders more reliably across terminals.
-- Added a real `3` lives system, so the `+` power-up now gives an extra life.
-- Kept the other power-ups intact: `E` expands the paddle and `S` slows the ball.
+The previous brick-breaker still exists in `arkanoid.py`, but the main launcher now starts the pinball prototype in `pinball.py`.
 
 ## Run
 
 ```bash
-python arkanoid.py
+python pinball.py
 ```
 
 On this machine, the compatible Windows launcher is:
@@ -29,9 +27,10 @@ On this machine, the compatible Windows launcher is:
 
 ## Controls
 
-- `Left` / `A`: move left
-- `Right` / `D`: move right
-- `Space` / `Enter`: start or confirm
+- `Space`: charge and release the launch lane, or start from the title screen
+- `Left` / `A`: left flipper
+- `Right` / `D`: right flipper
+- `H`: open the leaderboard from the title screen
 - `Q` / `Esc`: quit
 
 ## Requirements

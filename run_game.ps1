@@ -5,4 +5,4 @@ if (-not (Test-Path $python)) {
     exit 1
 }
 
-& $python "$PSScriptRoot\arkanoid.py"
+& $python "$PSScriptRoot\pinball.py"
