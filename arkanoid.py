@@ -5,6 +5,7 @@ import json
 import os
 import random
 import time
+import ctypes
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
@@ -75,6 +76,11 @@ CP_GAMEOVER = 17
 CP_LEADERBOARD = 18
 
 BRICK_COLOR_PAIRS = (CP_BRICK_0, CP_BRICK_1, CP_BRICK_2, CP_BRICK_3, CP_BRICK_4)
+
+VK_LEFT = 0x25
+VK_RIGHT = 0x27
+VK_A = 0x41
+VK_D = 0x44
 
 
 class GameState(str, Enum):
@@ -236,11 +242,39 @@ class FrameInput:
     typed_char: Optional[str] = None
 
 
+class DirectionPoller:
+    """Poll physical key state on Windows to avoid terminal key-repeat delay."""
+
+    def __init__(self) -> None:
+        self._get_async_key_state = None
+        if os.name != "nt":
+            return
+
+        user32 = ctypes.windll.user32
+        user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        user32.GetAsyncKeyState.restype = ctypes.c_short
+        self._get_async_key_state = user32.GetAsyncKeyState
+
+    def _is_pressed(self, *keys: int) -> bool:
+        if self._get_async_key_state is None:
+            return False
+        return any(self._get_async_key_state(key) & 0x8000 for key in keys)
+
+    def get_direction(self) -> int:
+        left_pressed = self._is_pressed(VK_LEFT, VK_A)
+        right_pressed = self._is_pressed(VK_RIGHT, VK_D)
+
+        if left_pressed == right_pressed:
+            return 0
+        return -1 if left_pressed else 1
+
+
 class Game:
     def __init__(self, screen: "curses._CursesWindow") -> None:
         self.screen = screen
         self.height, self.width = self.screen.getmaxyx()
         self.colors_enabled = False
+        self.direction_poller = DirectionPoller()
 
         self.leaderboard = Leaderboard(SCORES_FILE)
         self.phase = GameState.TITLE
@@ -407,6 +441,12 @@ class Game:
         return True
 
     def _update_paddle_direction(self, frame: FrameInput, now: float) -> None:
+        physical_direction = self.direction_poller.get_direction()
+        if physical_direction != 0:
+            self.paddle.direction = physical_direction
+            self.last_direction_press_at = now
+            return
+
         if frame.direction != 0:
             self.paddle.direction = frame.direction
             self.last_direction_press_at = now
