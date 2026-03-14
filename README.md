@@ -1,40 +1,43 @@
-# CLI Pinball Prototype
+# Runebreaker Prototype
 
-The project is now pivoting toward a terminal pinball game inspired by classic space tables.
+The project is pivoting from a terminal prototype toward a single-player browser game that mixes pinball, boss fights, and light roguelite progression.
 
-## Current Prototype
+## Current Direction
 
-- Single-screen ASCII table tuned for `80x24` and playable at `60x24`
-- Charged launch lane with a skill-shot window
-- Two flippers with direct left / right control
-- Three `I O N` targets that light the central reactor
-- Reactor jackpot that increases the score multiplier
-- Rescue lane, ball save, local high scores, and name entry
+- `Runebreaker` is a one-screen `Canvas` game
+- the ball is your soul-core inside an arcane citadel
+- side shots light runes and mint resources
+- a central boss heart becomes vulnerable after setup
+- floor clears award one relic out of three
 
-The previous brick-breaker still exists in `arkanoid.py`, but the main launcher now starts the pinball prototype in `pinball.py`.
+The older experiments still exist:
 
-## Run
+- `arkanoid.py`: legacy CLI brick-breaker
+- `pinball.py`: legacy CLI pinball prototype
 
-```bash
-python pinball.py
-```
+## Web Prototype Files
 
-On this machine, the compatible Windows launcher is:
+- `index.html`
+- `styles.css`
+- `game.js`
 
-```powershell
-.\run_game.ps1
-```
+## Design Plan
 
-## Controls
+The current gameplay plan is documented in `docs/runebreaker-plan.md`.
 
-- `Space`: charge and release the launch lane, or start from the title screen
-- `Left` / `A`: left flipper
-- `Right` / `D`: right flipper
-- `H`: open the leaderboard from the title screen
-- `Q` / `Esc`: quit
+## Intended Controls
 
-## Requirements
+- `Space`: start, charge, and launch
+- `A` / `D` or arrow keys: left / right flippers
+- `E`: cast the active spell
+- `1` / `2` / `3`: choose a relic reward
+- `F`: toggle fullscreen
 
-- Terminal size of at least `60x24`
-- A Python environment with `curses`
-- On Windows, you will usually need `windows-curses`
+## Status
+
+The browser prototype is in active design / implementation, with focus currently on:
+
+- first-floor readability
+- stable rally physics
+- boss vulnerability loop
+- relic reward flow

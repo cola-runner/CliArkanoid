@@ -1,0 +1,12 @@
+{
+  "name": "runebreaker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Single-player pinball RPG prototype",
+  "scripts": {
+    "test:web": "node \"%CODEX_HOME%/skills/develop-web-game/scripts/web_game_playwright_client.js\""
+  },
+  "dependencies": {
+    "playwright": "^1.54.2"
+  }
+}

@@ -24,32 +24,48 @@ MAX_MULTIPLIER = 5
 MAX_SCORES = 10
 
 BALL_RADIUS = 0.34
-BALL_GRAVITY = 28.0
-BALL_TERMINAL_SPEED = 42.0
-BALL_TRAIL_LENGTH = 7
+BALL_GRAVITY = 22.0
+BALL_TERMINAL_SPEED = 34.0
+BALL_TRAIL_LENGTH = 12
 
-PLUNGER_CHARGE_TIME = 1.15
-PLUNGER_MIN_SPEED = 16.0
-PLUNGER_MAX_SPEED = 32.0
+PLUNGER_CHARGE_TIME = 0.85
+PLUNGER_MIN_SPEED = 20.0
+PLUNGER_MAX_SPEED = 34.0
 SKILL_SHOT_WINDOW = 3.0
-BALL_SAVE_TIME = 6.0
+BALL_SAVE_TIME = 8.0
 
-FLIPPER_LENGTH = 4.6
-FLIPPER_REST_ANGLE = math.radians(21.0)
-FLIPPER_ACTIVE_ANGLE = math.radians(67.0)
+FLIPPER_LENGTH = 5.4
+FLIPPER_REST_ANGLE = math.radians(16.0)
+FLIPPER_ACTIVE_ANGLE = math.radians(56.0)
 FLIPPER_SPEED = math.radians(620.0)
 
-BUMPER_BOOST = 21.0
+BUMPER_BOOST = 23.0
 MESSAGE_TIME = 1.2
+
+VISIBLE_SEGMENT_NAMES = {
+    "left_wall",
+    "top_wall",
+    "left_orbit",
+    "right_orbit",
+    "left_upper_feed",
+    "right_upper_feed",
+    "left_reactor_guide",
+    "right_reactor_guide",
+    "main_right_wall",
+    "plunger_outer",
+    "plunger_inner",
+    "left_lane",
+    "right_lane",
+    "left_sling",
+    "right_sling",
+}
 
 SCORES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scores.json")
 
-TITLE_ART = [
-    "  ____   ____   ____ ___ _____ ___   _    _ ",
-    " / __ \\/ __ \\/ __ `__ \\\\__  // _ \\\\ | |  / /",
-    "/ /_/ // /_/ // / / / / |_ </  __/ | | / / ",
-    "\\____/ \\____//_/ /_/ /_/____/\\___/  | |/ /  ",
-    "                                     |___/  ",
+TITLE_LINES = [
+    "ORBITAL REACTOR",
+    "Light I O N.",
+    "Cash the core.",
 ]
 
 
@@ -231,12 +247,9 @@ class Flipper:
     angular_velocity: float = 0.0
 
     def update(self, dt: float) -> None:
-        target = FLIPPER_ACTIVE_ANGLE if self.active else FLIPPER_REST_ANGLE
-        direction = 1.0 if target > self.angle else -1.0
-        step = min(abs(target - self.angle), FLIPPER_SPEED * dt)
-        new_angle = self.angle + direction * step if step > 0 else target
-        self.angular_velocity = (new_angle - self.angle) / dt if dt > 0 else 0.0
-        self.angle = new_angle
+        previous = self.angle
+        self.angle = FLIPPER_ACTIVE_ANGLE if self.active else FLIPPER_REST_ANGLE
+        self.angular_velocity = (self.angle - previous) / dt if dt > 0 else 0.0
 
     def endpoints(self) -> Tuple[float, float, float, float]:
         dx = math.cos(self.angle) * self.length
@@ -256,6 +269,7 @@ class TableLayout:
     plunger_left: float
     plunger_right: float
     plunger_x: float
+    launch_gate_y: float
     left_flipper_pivot: Tuple[float, float]
     right_flipper_pivot: Tuple[float, float]
     drain_left: float
@@ -268,6 +282,9 @@ class TableLayout:
     reactor: CircleObject
     rescue_zone: TriggerZone
     skill_zone: TriggerZone
+    left_orbit_zone: TriggerZone
+    right_orbit_zone: TriggerZone
+    core_lane_zone: TriggerZone
 
 
 @dataclass
@@ -351,11 +368,13 @@ class Game:
         self.ball_trail: Deque[Tuple[int, int]] = deque(maxlen=BALL_TRAIL_LENGTH)
         self.ball_in_launch_lane = False
         self.plunger_charge = 0.0
+        self.launch_redirect_done = False
         self.skill_shot_timer = 0.0
         self.skill_shot_ready = False
         self.ball_save_timer = 0.0
         self.combo_count = 0
         self.combo_timer = 0.0
+        self.bumper_charge_hits = 0
 
         self.message = "PRESS SPACE TO START"
         self.message_timer = 999.0
@@ -549,6 +568,7 @@ class Game:
         self.hit_cooldowns.clear()
         self.combo_count = 0
         self.combo_timer = 0.0
+        self.bumper_charge_hits = 0
         self.ball_save_timer = 0.0
         self.name_buffer = ""
         self.pending_score = 0
@@ -562,10 +582,26 @@ class Game:
         self.ball_trail.clear()
         self.ball_in_launch_lane = True
         self.plunger_charge = 0.0
+        self.launch_redirect_done = False
         self.skill_shot_timer = 0.0
         self.skill_shot_ready = False
         self.combo_count = 0
         self.combo_timer = 0.0
+
+    def _launch_ball(self) -> None:
+        if self.ball is None:
+            return
+
+        charge = clamp(self.plunger_charge, 0.12, 1.0)
+        launch_speed = PLUNGER_MIN_SPEED + (PLUNGER_MAX_SPEED - PLUNGER_MIN_SPEED) * charge
+        self.ball.vx = 0.0
+        self.ball.vy = -launch_speed
+        self.ball_in_launch_lane = False
+        self.skill_shot_timer = SKILL_SHOT_WINDOW
+        self.skill_shot_ready = True
+        self.ball_save_timer = BALL_SAVE_TIME
+        self._show_message("SKILL SHOT OPEN", 0.9)
+        self.plunger_charge = 0.0
 
     def _submit_score(self) -> None:
         name = self.name_buffer[:3].ljust(3).upper()
@@ -626,20 +662,9 @@ class Game:
             self._show_message("CHARGE " + str(int(self.plunger_charge * 100)).rjust(3) + "%", 0.2)
             return
 
-        if action_released and self.plunger_charge > 0.02:
-            launch_speed = PLUNGER_MIN_SPEED + (PLUNGER_MAX_SPEED - PLUNGER_MIN_SPEED) * self.plunger_charge
-            self.ball.vx = 0.0
-            self.ball.vy = -launch_speed
-            self.ball_in_launch_lane = False
-            self.skill_shot_timer = SKILL_SHOT_WINDOW
-            self.skill_shot_ready = True
-            self.ball_save_timer = BALL_SAVE_TIME
-            self._show_message("SKILL SHOT OPEN", 0.9)
-            self.plunger_charge = 0.0
+        if action_released:
+            self._launch_ball()
             return
-
-        if action_pressed and not frame.action_down:
-            self.plunger_charge = 0.18
 
     def _update_flippers(self, dt: float, frame: FrameInput) -> None:
         self.left_flipper.active = frame.left_down
@@ -709,6 +734,14 @@ class Game:
                 self.ball.vx -= (1.75 * normal_speed) * nx
                 self.ball.vy -= (1.75 * normal_speed) * ny
 
+            if segment.name in {"left_sling", "right_sling"} and not self._cooldown_active(segment.name):
+                self.hit_cooldowns[segment.name] = 0.12
+                self.flash_timers[segment.name] = 0.16
+                self.ball.vx += -4.5 if segment.name == "right_sling" else 4.5
+                self.ball.vy = min(self.ball.vy, -15.0)
+                self._add_score(180)
+                self._show_message("SLING", 0.45)
+
     def _resolve_circle_collisions(self) -> None:
         if self.ball is None:
             return
@@ -756,7 +789,7 @@ class Game:
             dx = self.ball.x - qx
             dy = self.ball.y - qy
             distance = math.hypot(dx, dy)
-            limit = BALL_RADIUS + 0.34
+            limit = BALL_RADIUS + 0.46
             if distance >= limit:
                 continue
 
@@ -780,11 +813,11 @@ class Game:
             flip_power = max(0.0, flipper.angular_velocity)
             side_push = -1.0 if flipper.side == "right" else 1.0
             if flipper.active and flip_power > 0:
-                self.ball.vx += side_push * (6.0 + 8.0 * (1.0 - t))
-                self.ball.vy = min(self.ball.vy, -(18.0 + 10.0 * t))
+                self.ball.vx += side_push * (8.8 + 11.5 * (1.0 - t))
+                self.ball.vy = min(self.ball.vy, -(21.0 + 13.0 * t))
             else:
-                self.ball.vx += side_push * 1.6
-                self.ball.vy = min(self.ball.vy, -11.0)
+                self.ball.vx += side_push * 2.7
+                self.ball.vy = min(self.ball.vy, -13.0)
 
     def _handle_bumper_hit(self, circle: CircleObject) -> None:
         if self._cooldown_active(circle.name):
@@ -794,8 +827,19 @@ class Game:
         self.flash_timers[circle.name] = 0.16
         self.combo_count = min(5, self.combo_count + 1 if self.combo_timer > 0 else 1)
         self.combo_timer = 1.15
+        self.bumper_charge_hits += 1
         points = 90 * self.combo_count
         self._add_score(points)
+
+        if not all(self.target_lights) and self.bumper_charge_hits % 4 == 0:
+            self._light_next_target()
+            if all(self.target_lights):
+                self.flash_timers[self.layout.reactor.name] = 0.7
+                self._show_message("REACTOR HOT", 1.1)
+            else:
+                self._show_message("ION CHARGED", 0.8)
+            return
+
         self._show_message(f"BUMPER x{self.combo_count}", 0.55)
 
     def _handle_target_hit(self, circle: CircleObject) -> None:
@@ -856,18 +900,79 @@ class Game:
             self._add_score(550)
             self._show_message("RESCUE ONLINE", 1.0)
 
+        if (
+            self.layout.left_orbit_zone.contains(self.ball.x, self.ball.y)
+            and self.ball.vy < 0
+            and not self._cooldown_active(self.layout.left_orbit_zone.name)
+        ):
+            self.hit_cooldowns[self.layout.left_orbit_zone.name] = 0.35
+            self.ball_save_timer = max(self.ball_save_timer, 2.0)
+            self.ball.vx = max(self.ball.vx, 13.5)
+            self._add_score(240)
+            lit_index = self._light_next_target() if not all(self.target_lights) else None
+            if lit_index is not None and all(self.target_lights):
+                self.flash_timers[self.layout.reactor.name] = 0.7
+                self._show_message("REACTOR HOT", 1.1)
+            elif lit_index is not None:
+                self._show_message(f"LIT {self.layout.targets[lit_index].label[0]}", 0.65)
+            else:
+                self._show_message("LEFT ORBIT", 0.6)
+
+        if (
+            self.layout.right_orbit_zone.contains(self.ball.x, self.ball.y)
+            and self.ball.vy < 0
+            and not self._cooldown_active(self.layout.right_orbit_zone.name)
+        ):
+            self.hit_cooldowns[self.layout.right_orbit_zone.name] = 0.35
+            self.ball.vx = min(self.ball.vx, -13.5)
+            self._add_score(240)
+            lit_index = self._light_next_target() if not all(self.target_lights) else None
+            if lit_index is not None and all(self.target_lights):
+                self.flash_timers[self.layout.reactor.name] = 0.7
+                self._show_message("REACTOR HOT", 1.1)
+            elif lit_index is not None:
+                self._show_message(f"LIT {self.layout.targets[lit_index].label[0]}", 0.65)
+            else:
+                self._show_message("RIGHT ORBIT", 0.6)
+
+        if (
+            self.layout.core_lane_zone.contains(self.ball.x, self.ball.y)
+            and self.ball.vy < 0
+            and not self._cooldown_active(self.layout.core_lane_zone.name)
+        ):
+            self.hit_cooldowns[self.layout.core_lane_zone.name] = 0.25
+            if all(self.target_lights):
+                self.ball.x = (self.ball.x * 2.0 + self.layout.reactor.x) / 3.0
+                self._handle_reactor_hit(self.layout.reactor)
+                return
+            self.flash_timers[self.layout.reactor.name] = max(
+                self.flash_timers.get(self.layout.reactor.name, 0.0),
+                0.18,
+            )
+            self._add_score(140)
+            self._show_message("CORE LINE", 0.45)
+
     def _check_skill_shot_gate(self) -> None:
-        if self.ball is None or not self.skill_shot_ready:
+        if self.ball is None:
+            return
+        if self.launch_redirect_done:
             return
 
-        if self.ball.y <= self.layout.skill_zone.bottom and self.ball.x >= self.layout.skill_zone.left:
+        if self.ball.x < self.layout.plunger_left - 0.4:
+            return
+        if self.ball.y > self.layout.launch_gate_y + 0.5:
+            return
+
+        if self.skill_shot_ready:
             self.skill_shot_ready = False
             self._add_score(1500)
             self._light_next_target()
             self._show_message("SKILL SHOT", 1.0)
 
-        if self.ball.x >= self.layout.plunger_left - 0.2 and self.ball.y <= self.layout.top + 2.4:
-            self.ball.vx = -max(11.0, abs(self.ball.vy) * 0.6)
+        self.launch_redirect_done = True
+        self.ball.x = min(self.ball.x, self.layout.main_right - 1.4)
+        self.ball.vx = -max(16.0, abs(self.ball.vy) * 0.9)
+        self.ball.vy = min(self.ball.vy, -14.2)
 
     def _check_drain(self) -> None:
         if self.ball is None:
@@ -895,11 +1000,13 @@ class Game:
     def _add_score(self, base_points: int) -> None:
         self.score += base_points * self.multiplier
 
-    def _light_next_target(self) -> None:
+    def _light_next_target(self) -> Optional[int]:
         for index, lit in enumerate(self.target_lights):
             if not lit:
                 self.target_lights[index] = True
-                return
+                self.flash_timers[self.layout.targets[index].name] = 0.35
+                return index
+        return None
 
     def _show_message(self, text: str, duration: float = MESSAGE_TIME) -> None:
         self.message = text
@@ -917,16 +1024,21 @@ class Game:
             return "GOAL JACKPOT"
         if self.skill_shot_ready and self.skill_shot_timer > 0:
             return "GOAL SKILL SHOT"
-        return "GOAL LIGHT ION"
+        return "GOAL ORBITS > ION > CORE"
+
+    def _ion_bank_text(self) -> str:
+        letters = [target.label[0] if lit else "_" for target, lit in zip(self.layout.targets, self.target_lights)]
+        return "".join(letters)
 
     def _save_text(self) -> str:
         if self.phase != Phase.PLAYING:
             return ""
+        status = f"BALLS {self.balls}  x{self.multiplier}  ION {self._ion_bank_text()}"
         if self.ball_in_launch_lane:
-            return f"BALLS {self.balls}  x{self.multiplier}"
+            return status
         if self.ball_save_timer > 0:
-            return f"BALLS {self.balls}  x{self.multiplier}  SAVE {int(math.ceil(self.ball_save_timer))}"
-        return f"BALLS {self.balls}  x{self.multiplier}"
+            return f"{status}  SAVE {int(math.ceil(self.ball_save_timer))}"
+        return status
 
     def _render(self) -> None:
         self.screen.erase()
@@ -939,7 +1051,8 @@ class Game:
 
         self._draw_hud()
         self._draw_border()
-        self._draw_playfield()
+        if self.phase in (Phase.TITLE, Phase.PLAYING, Phase.GAME_OVER, Phase.ENTER_NAME):
+            self._draw_playfield()
 
         if self.phase == Phase.TITLE:
             self._draw_title()
@@ -981,26 +1094,60 @@ class Game:
     def _draw_playfield(self) -> None:
         rail_attr = self._attr(CP_BORDER, curses.A_DIM)
         for segment in self.layout.segments:
+            if segment.name not in VISIBLE_SEGMENT_NAMES:
+                continue
             self._draw_segment(segment.x1, segment.y1, segment.x2, segment.y2, self._segment_char(segment), rail_attr)
 
+        self._draw_playfield_art()
         self._draw_static_labels()
         self._draw_targets()
         self._draw_bumpers()
+        self._draw_posts()
         self._draw_reactor()
         self._draw_flipper(self.left_flipper)
         self._draw_flipper(self.right_flipper)
         self._draw_ball_and_trail()
 
+    def _draw_playfield_art(self) -> None:
+        rail_attr = self._attr(CP_BORDER, curses.A_DIM)
+        accent_attr = self._attr(CP_HUD, curses.A_BOLD)
+        hot_attr = self._attr(CP_BEST, curses.A_BOLD)
+        alert_attr = self._attr(CP_ALERT, curses.A_BOLD)
+
+        center = int(round(self.layout.reactor.x))
+        top = int(round(self.layout.top))
+        reactor_y = int(round(self.layout.reactor.y))
+        main_right = int(round(self.layout.main_right))
+        left = int(round(self.layout.left))
+        bottom = int(round(self.layout.bottom))
+        target_y = int(round(self.layout.targets[1].y))
+        bumper_y = int(round(self.layout.bumpers[1].y))
+
+        self._safe_addstr(target_y - 2, center - 13, "/------.---^---.------\\", hot_attr)
+        self._safe_addstr(target_y - 1, center - 14, "/      /         \\      \\", rail_attr)
+        self._safe_addstr(target_y + 1, center - 12, "\\_____/  .---.  \\_____/", rail_attr)
+        self._safe_addstr(reactor_y + 2, center - 8, "<== CORE ==>", accent_attr)
+        self._safe_addstr(reactor_y + 5, center - 15, "/\\                    /\\", rail_attr)
+        self._safe_addstr(reactor_y + 6, center - 18, "/  \\                /  \\", rail_attr)
+        self._safe_addstr(bottom - 4, center - 14, "____/            \\____", rail_attr)
+        self._safe_addstr(bottom - 3, center - 6, "\\___ ___/", alert_attr)
+
+        for y in range(top + 2, bumper_y + 7):
+            self._safe_addch(y, left + 1, "|", rail_attr)
+            self._safe_addch(y, left + 2, "|", rail_attr)
+            self._safe_addch(y, main_right - 1, "|", rail_attr)
+
     def _draw_static_labels(self) -> None:
         lane_attr = self._attr(CP_HUD, curses.A_BOLD)
         save_attr = self._attr(CP_SAVE, curses.A_BOLD)
-        self._safe_addstr(int(self.layout.top) + 1, int(self.layout.left) + 1, "RESCUE", save_attr)
-        self._safe_addstr(int(self.layout.top) + 1, int(self.layout.plunger_left) + 1, "LAUNCH", lane_attr)
-        self._safe_addstr(int(self.layout.reactor.y) - 2, int(self.layout.reactor.x) - 3, "REACTOR", lane_attr)
+        self._safe_addstr(int(self.layout.top) + 1, int(self.layout.left) + 2, "RESCUE", save_attr)
+        self._safe_addstr(int(self.layout.top) + 1, int(self.layout.plunger_left) - 1, "LAUNCH", lane_attr)
+        self._safe_addstr(int(self.layout.top) + 5, int(self.layout.main_right) - 1, "R", lane_attr)
+        self._safe_addstr(int(self.layout.launch_gate_y) - 1, int(self.layout.plunger_left) + 1, "SHOT", lane_attr)
 
         if self.phase == Phase.PLAYING and self.ball_in_launch_lane:
-            fill = int(round(self.plunger_charge * 5))
-            for index in range(5):
+            fill = int(round(self.plunger_charge * 6))
+            for index in range(6):
                 char = "#" if index < fill else "."
                 self._safe_addch(int(self.layout.bottom) - 2 - index, int(self.layout.plunger_right) - 1, char, lane_attr)
 
@@ -1013,73 +1160,133 @@ class Game:
             lit = self.target_lights[index]
             flash = self.flash_timers.get(target.name, 0.0) > 0
             attr = self._attr(CP_TARGET_LIT if lit or flash else CP_TARGET, curses.A_BOLD)
-            text = f"[{target.label[0]}]" if lit or flash else f" {target.label[0]} "
+            text = f"[{target.label[0]}]" if lit or flash else f"({target.label[0]})"
             self._safe_addstr(int(round(target.y)), int(round(target.x)) - 1, text, attr)
 
     def _draw_bumpers(self) -> None:
         for bumper in self.layout.bumpers:
             flash = self.flash_timers.get(bumper.name, 0.0) > 0
             attr = self._attr(CP_BEST if flash else CP_BUMPER, curses.A_BOLD)
-            self._safe_addstr(int(round(bumper.y)), int(round(bumper.x)) - 1, "(O)", attr)
+            self._safe_addstr(int(round(bumper.y)), int(round(bumper.x)) - 1, "{O}", attr)
+
+    def _draw_posts(self) -> None:
+        post_attr = self._attr(CP_BORDER)
+        for post in self.layout.posts:
+            self._safe_addch(int(round(post.y)), int(round(post.x)), "o", post_attr)
 
     def _draw_reactor(self) -> None:
         hot = all(self.target_lights)
         flash = self.flash_timers.get(self.layout.reactor.name, 0.0) > 0
         pair = CP_REACTOR_HOT if hot or flash else CP_REACTOR
         attr = self._attr(pair, curses.A_BOLD)
-        text = "{@}" if hot or flash else "<#>"
+        text = "{@}" if hot or flash else "[#]"
         self._safe_addstr(int(round(self.layout.reactor.y)), int(round(self.layout.reactor.x)) - 1, text, attr)
+        if hot:
+            self._safe_addstr(int(round(self.layout.reactor.y)) + 1, int(round(self.layout.reactor.x)) - 1, "HOT", attr)
 
     def _draw_flipper(self, flipper: Flipper) -> None:
-        x1, y1, x2, y2 = flipper.endpoints()
         attr = self._attr(CP_FLIPPER, curses.A_BOLD)
-        char = "=" if flipper.active else self._segment_char(Segment("f", x1, y1, x2, y2))
-        self._draw_segment(x1, y1, x2, y2, char, attr)
-        self._safe_addch(int(round(flipper.pivot_y)), int(round(flipper.pivot_x)), "o", attr)
+        pivot_x = int(round(flipper.pivot_x))
+        pivot_y = int(round(flipper.pivot_y))
+
+        if flipper.side == "left":
+            cells = (
+                [
+                    (pivot_x, pivot_y, "("),
+                    (pivot_x + 1, pivot_y, "="),
+                    (pivot_x + 2, pivot_y, "="),
+                    (pivot_x + 3, pivot_y, "="),
+                    (pivot_x + 4, pivot_y, ">"),
+                ]
+                if not flipper.active
+                else [
+                    (pivot_x, pivot_y, "("),
+                    (pivot_x + 1, pivot_y - 1, "\\"),
+                    (pivot_x + 2, pivot_y - 2, "="),
+                    (pivot_x + 3, pivot_y - 2, "="),
+                    (pivot_x + 4, pivot_y - 3, ">"),
+                ]
+            )
+        else:
+            cells = (
+                [
+                    (pivot_x, pivot_y, ")"),
+                    (pivot_x - 1, pivot_y, "="),
+                    (pivot_x - 2, pivot_y, "="),
+                    (pivot_x - 3, pivot_y, "="),
+                    (pivot_x - 4, pivot_y, "<"),
+                ]
+                if not flipper.active
+                else [
+                    (pivot_x, pivot_y, ")"),
+                    (pivot_x - 1, pivot_y - 1, "/"),
+                    (pivot_x - 2, pivot_y - 2, "="),
+                    (pivot_x - 3, pivot_y - 2, "="),
+                    (pivot_x - 4, pivot_y - 3, "<"),
+                ]
+            )
+
+        for x, y, char in cells:
+            self._safe_addch(y, x, char, attr)
 
     def _draw_ball_and_trail(self) -> None:
-        trail_attr = self._attr(CP_TRAIL, curses.A_DIM)
-        for x, y in list(self.ball_trail)[:-1]:
-            self._safe_addch(y, x, ".", trail_attr)
+        trail_points = list(self.ball_trail)[:-1]
+        for index, (x, y) in enumerate(trail_points):
+            if index < len(trail_points) - 6:
+                char = "."
+                attr = self._attr(CP_TRAIL, curses.A_DIM)
+            elif index < len(trail_points) - 3:
+                char = ":"
+                attr = self._attr(CP_TRAIL)
+            else:
+                char = "*"
+                attr = self._attr(CP_BEST)
+            self._safe_addch(y, x, char, attr)
 
         if self.ball is None:
             return
 
+        ball_speed = abs(self.ball.vx) + abs(self.ball.vy)
         ball_attr = self._attr(CP_BALL, curses.A_BOLD)
-        self._safe_addch(self.ball.iy, self.ball.ix, "o", ball_attr)
+        self._safe_addch(self.ball.iy, self.ball.ix, "@" if ball_speed > 22 else "o", ball_attr)
 
     def _draw_title(self) -> None:
         title_attr = self._attr(CP_TITLE, curses.A_BOLD)
         info_attr = self._attr(CP_HUD, curses.A_BOLD)
         hot_attr = self._attr(CP_BEST, curses.A_BOLD)
 
-        art_y = 4
-        for index, line in enumerate(TITLE_ART):
-            self._center_text(art_y + index, line, title_attr)
+        lines = list(TITLE_LINES)
+        lines.append("")
+        lines.append("RIGHT SHOT  skill shot")
+        lines.append("ORBITS      light ION")
+        lines.append("HOT CORE    jackpot + mult")
+        lines.append("3 JACKPOTS  extra ball")
+        lines.append("")
+        lines.append("SPACE  start / launch")
+        lines.append("A D    flip     H scores     Q quit")
+        lines.append("")
 
-        self._center_text(art_y + len(TITLE_ART) + 1, "Orbital Reactor table for the terminal.", info_attr)
-        self._center_text(art_y + len(TITLE_ART) + 2, "Charge the launch lane, light I O N, then cash the reactor.", info_attr)
-
-        top_y = art_y + len(TITLE_ART) + 4
-        self._center_text(top_y, "Top Pilots", hot_attr)
-        preview = self.leaderboard.top(5)
+        preview = self.leaderboard.top(3)
         if preview:
+            lines.append("TOP PILOTS")
             for index, entry in enumerate(preview):
-                line = f"{index + 1:>2}. {entry.name:<3}  {entry.score:>7}  x{entry.mult}"
-                self._center_text(top_y + 1 + index, line, info_attr)
+                lines.append(f"{index + 1:>2}. {entry.name:<3}  {entry.score:>7}  x{entry.mult}")
         else:
-            self._center_text(top_y + 1, "No scores yet.", info_attr)
+            lines.append("No scores yet. Be the first.")
 
-        controls_y = top_y + 7
-        self._center_text(controls_y, "SPACE: charge and release launch / start", hot_attr)
-        self._center_text(controls_y + 1, "A D or Left Right: flippers", info_attr)
-        self._center_text(controls_y + 2, "H: leaderboard  Q or ESC: quit", info_attr)
+        self._draw_panel("CLI PINBALL", lines, title_attr)
+        self._center_text(5, "One screen. One ball. One more run.", hot_attr)
+        self._center_text(6, "Shoot right. Light I O N. Hit the core.", info_attr)
 
     def _draw_game_over(self) -> None:
+        next_letter = next((target.label[0] for target, lit in zip(self.layout.targets, self.target_lights) if not lit), None)
+        next_goal = "Shoot the core." if next_letter is None else f"Light {next_letter}."
         lines = [
             f"Score:      {self.score}",
             f"Peak mult:  x{self.peak_multiplier}",
             f"Jackpots:   {self.jackpots}",
+            f"Ion bank:   {self._ion_bank_text()}",
+            f"Next goal:  {next_goal}",
             "",
             "Press SPACE to return to title",
             "Press Q or ESC to quit",
@@ -1137,11 +1344,16 @@ class Game:
         self._center_text(self.height // 2 + 1, controls, self._attr(CP_HUD, curses.A_BOLD))
 
     def _draw_segment(self, x1: float, y1: float, x2: float, y2: float, char: str, attr: int) -> None:
+        for x, y in self._segment_points(x1, y1, x2, y2):
+            self._safe_addch(y, x, char, attr)
+
+    def _segment_points(self, x1: float, y1: float, x2: float, y2: float) -> List[Tuple[int, int]]:
         start_x = int(round(x1))
         start_y = int(round(y1))
         end_x = int(round(x2))
         end_y = int(round(y2))
 
+        points: List[Tuple[int, int]] = []
         dx = abs(end_x - start_x)
         dy = -abs(end_y - start_y)
         sx = 1 if start_x < end_x else -1
@@ -1151,7 +1363,8 @@ class Game:
         y = start_y
 
         while True:
-            self._safe_addch(y, x, char, attr)
+            if not points or points[-1] != (x, y):
+                points.append((x, y))
             if x == end_x and y == end_y:
                 break
             e2 = 2 * error
@@ -1161,6 +1374,7 @@ class Game:
             if e2 <= dx:
                 error += dx
                 y += sy
+        return points
 
     def _segment_char(self, segment: Segment) -> str:
         dx = segment.x2 - segment.x1
@@ -1234,51 +1448,70 @@ class Game:
         main_right = plunger_left - 1.6
 
         center_x = (left + main_right) / 2.0
-        left_pivot = (center_x - 6.0, bottom - 2.2)
-        right_pivot = (center_x + 6.0, bottom - 2.2)
+        left_pivot = (center_x - 5.8, bottom - 2.3)
+        right_pivot = (center_x + 5.8, bottom - 2.3)
+        launch_gate_y = top + 9.2
 
-        drain_left = center_x - 2.2
-        drain_right = center_x + 2.2
+        drain_left = center_x - 1.05
+        drain_right = center_x + 1.05
         drain_y = bottom - 0.2
 
         segments = [
             Segment("left_wall", left, top + 1.0, left, bottom - 6.5),
-            Segment("top_wall", left, top, main_right - 1.0, top),
-            Segment("top_left_guide", left + 0.5, top + 2.0, left + 3.5, top),
-            Segment("top_right_guide", main_right - 4.0, top, main_right - 1.0, top + 2.0),
-            Segment("main_right_wall", main_right, top + 4.0, main_right, bottom - 6.5),
+            Segment("top_wall", left + 7.0, top, main_right - 7.0, top),
+            Segment("left_orbit", left + 1.0, top + 6.0, left + 7.0, top + 0.8),
+            Segment("right_orbit", main_right - 7.0, top + 0.8, main_right - 1.0, top + 6.0),
+            Segment("left_upper_feed", left + 8.0, top + 1.0, center_x - 8.8, top + 6.0),
+            Segment("right_upper_feed", center_x + 8.8, top + 6.0, main_right - 8.0, top + 1.0),
+            Segment("left_reactor_guide", center_x - 12.0, top + 10.6, center_x - 4.2, top + 13.3),
+            Segment("right_reactor_guide", center_x + 4.2, top + 13.3, center_x + 12.0, top + 10.6),
+            Segment("main_right_wall", main_right, top + 6.0, main_right, bottom - 6.5),
             Segment("plunger_outer", plunger_right, top, plunger_right, bottom - 1.0),
-            Segment("plunger_inner", plunger_left, top + 4.0, plunger_left, bottom - 2.0),
-            Segment("plunger_gate", plunger_left + 0.2, top + 3.6, plunger_right - 0.6, top + 1.0),
-            Segment("left_lane", left + 0.5, bottom - 1.0, left_pivot[0] - 2.0, bottom - 4.6),
-            Segment("right_lane", main_right - 0.4, bottom - 1.0, right_pivot[0] + 2.0, bottom - 4.6),
-            Segment("left_sling", center_x - 1.4, bottom - 8.0, left_pivot[0] + 2.0, bottom - 4.8),
-            Segment("right_sling", center_x + 1.4, bottom - 8.0, right_pivot[0] - 2.0, bottom - 4.8),
+            Segment("plunger_inner", plunger_left, launch_gate_y, plunger_left, bottom - 2.0),
+            Segment("left_lane", left + 0.5, bottom - 1.0, left_pivot[0] - 3.6, bottom - 5.4),
+            Segment("left_inlane_guard", drain_left - 0.3, bottom - 0.7, center_x - 4.2, bottom - 6.0),
+            Segment("right_lane", main_right - 0.4, bottom - 1.0, right_pivot[0] + 3.6, bottom - 5.4),
+            Segment("right_inlane_guard", drain_right + 0.3, bottom - 0.7, center_x + 4.2, bottom - 6.0),
+            Segment("left_sling", center_x - 2.0, bottom - 8.2, left_pivot[0] + 2.5, bottom - 5.0),
+            Segment("right_sling", center_x + 2.0, bottom - 8.2, right_pivot[0] - 2.5, bottom - 5.0),
         ]
 
         bumpers = [
-            CircleObject("bumper_left", center_x - 7.0, top + 6.5, 1.1, "bumper"),
-            CircleObject("bumper_mid", center_x, top + 8.0, 1.1, "bumper"),
-            CircleObject("bumper_right", center_x + 7.0, top + 6.5, 1.1, "bumper"),
+            CircleObject("bumper_left", center_x - 9.0, top + 10.2, 1.22, "bumper"),
+            CircleObject("bumper_mid", center_x, top + 8.7, 1.22, "bumper"),
+            CircleObject("bumper_right", center_x + 9.0, top + 10.2, 1.22, "bumper"),
         ]
 
         targets = [
-            CircleObject("target_0", left + 7.0, top + 3.4, 0.85, "target", "I0"),
-            CircleObject("target_1", center_x, top + 2.6, 0.85, "target", "O1"),
-            CircleObject("target_2", main_right - 4.5, top + 3.4, 0.85, "target", "N2"),
+            CircleObject("target_0", center_x - 10.0, top + 5.4, 0.98, "target", "I0"),
+            CircleObject("target_1", center_x, top + 4.7, 0.98, "target", "O1"),
+            CircleObject("target_2", center_x + 10.0, top + 5.4, 0.98, "target", "N2"),
         ]
 
         posts = [
             CircleObject("post_left_outer", left_pivot[0] - 1.7, bottom - 4.8, 0.5, "post"),
-            CircleObject("post_left_inner", center_x - 2.7, bottom - 6.1, 0.48, "post"),
-            CircleObject("post_right_inner", center_x + 2.7, bottom - 6.1, 0.48, "post"),
+            CircleObject("post_left_inner", center_x - 3.0, bottom - 6.2, 0.5, "post"),
+            CircleObject("post_right_inner", center_x + 3.0, bottom - 6.2, 0.5, "post"),
             CircleObject("post_right_outer", right_pivot[0] + 1.7, bottom - 4.8, 0.5, "post"),
+            CircleObject("post_upper_left", center_x - 6.0, top + 12.2, 0.42, "post"),
+            CircleObject("post_upper_right", center_x + 6.0, top + 12.2, 0.42, "post"),
+            CircleObject("post_orbit_left", center_x - 12.6, top + 8.8, 0.42, "post"),
+            CircleObject("post_orbit_right", center_x + 12.6, top + 8.8, 0.42, "post"),
         ]
 
-        reactor = CircleObject("reactor", center_x, top + 4.8, 1.2, "reactor")
+        reactor = CircleObject("reactor", center_x, top + 12.3, 1.46, "reactor")
 
         rescue_zone = TriggerZone("rescue_lane", left - 0.1, top + 0.8, left + 2.8, top + 5.4)
-        skill_zone = TriggerZone("skill_gate", plunger_left - 0.2, top - 0.2, plunger_right + 0.2, top + 2.1)
+        skill_zone = TriggerZone(
+            "skill_gate",
+            plunger_left - 0.2,
+            launch_gate_y - 2.2,
+            plunger_right + 0.2,
+            launch_gate_y + 0.6,
+        )
+        left_orbit_zone = TriggerZone("left_orbit", left + 0.8, top + 2.0, left + 6.8, top + 9.0)
+        right_orbit_zone = TriggerZone("right_orbit", main_right - 6.0, top + 2.0, main_right - 0.6, top + 11.5)
+        core_lane_zone = TriggerZone("core_lane", center_x - 2.3, top + 9.0, center_x + 2.3, top + 15.0)
 
         return TableLayout(
             left=left,
@@ -1289,6 +1522,7 @@ class Game:
             plunger_left=plunger_left,
             plunger_right=plunger_right,
             plunger_x=(plunger_left + plunger_right) / 2.0,
+            launch_gate_y=launch_gate_y,
             left_flipper_pivot=left_pivot,
             right_flipper_pivot=right_pivot,
             drain_left=drain_left,
@@ -1301,6 +1535,9 @@ class Game:
             reactor=reactor,
             rescue_zone=rescue_zone,
             skill_zone=skill_zone,
+            left_orbit_zone=left_orbit_zone,
+            right_orbit_zone=right_orbit_zone,
+            core_lane_zone=core_lane_zone,
         )
 
 
